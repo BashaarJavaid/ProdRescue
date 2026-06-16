@@ -1,0 +1,16 @@
+.git
+.venv
+venv
+__pycache__
+*.pyc
+.mypy_cache
+.ruff_cache
+.pytest_cache
+htmlcov
+.coverage
+coverage.json
+dryrun_prs
+infra/.terraform
+*.tfstate*
+.DS_Store
+PRODRESCUE.md

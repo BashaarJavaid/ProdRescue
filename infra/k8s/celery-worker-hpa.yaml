@@ -1,0 +1,20 @@
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: celery-worker-hpa
+  namespace: prodrescue
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: celery-worker
+  minReplicas: 1
+  maxReplicas: 10
+  metrics:
+    - type: External
+      external:
+        metric:
+          name: rabbitmq_queue_messages_ready   # exported by a rabbitmq prometheus exporter
+        target:
+          type: AverageValue
+          averageValue: "5"                      # scale up when queue depth > 5 per pod

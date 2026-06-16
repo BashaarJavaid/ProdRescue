@@ -1,0 +1,22 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: prodrescue
+---
+# Template for the secret consumed via envFrom. Populate real values out-of-band
+# (e.g. `kubectl create secret generic prodrescue-secrets --from-env-file=.env`).
+apiVersion: v1
+kind: Secret
+metadata:
+  name: prodrescue-secrets
+  namespace: prodrescue
+type: Opaque
+stringData:
+  DATABASE_URL: postgresql://prodrescue:CHANGEME@prodrescue-db:5432/prodrescue
+  RABBITMQ_URL: amqp://guest:guest@rabbitmq:5672//
+  REDIS_URL: redis://prodrescue-redis:6379/0
+  LLM_BASE_URL: https://api.example-mimo.com/v1
+  LLM_API_KEY: CHANGEME
+  LLM_MODEL: MiMo-V2.5-Pro
+  GITHUB_TOKEN: ""
+  REPO_FULL_NAME: youruser/prodrescue-sample-target

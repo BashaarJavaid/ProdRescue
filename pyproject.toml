@@ -1,0 +1,35 @@
+[project]
+name = "prodrescue"
+version = "0.1.0"
+description = "Self-healing DevOps agent — autonomous SRE pipeline"
+requires-python = ">=3.11"
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+src = ["services", "tests"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "W"]
+ignore = ["E501"]  # line length handled by formatter; long SQL/prompts allowed
+
+[tool.mypy]
+python_version = "3.11"
+ignore_missing_imports = true
+warn_unused_ignores = false
+no_implicit_optional = true
+files = ["services"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+asyncio_default_fixture_loop_scope = "function"
+testpaths = ["tests"]
+pythonpath = ["."]
+addopts = "-ra"
+markers = [
+    "integration: requires the docker-compose stack to be running",
+]
+
+[tool.coverage.run]
+source = ["services"]
+omit = ["*/__init__.py", "*/tests/*"]

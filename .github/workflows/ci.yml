@@ -1,0 +1,87 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - run: pip install ruff mypy
+      - run: ruff check services/
+      - run: mypy services/ --ignore-missing-imports
+
+  test:
+    runs-on: ubuntu-latest
+    needs: lint
+    services:
+      postgres:
+        image: timescale/timescaledb-ha:pg15
+        env:
+          POSTGRES_PASSWORD: test
+          POSTGRES_DB: prodrescue_test
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+      redis:
+        image: redis:7-alpine
+        ports: ["6379:6379"]
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+    env:
+      DATABASE_URL: postgresql://postgres:test@localhost:5432/prodrescue_test
+      REDIS_URL: redis://localhost:6379/0
+      EMBED_BACKEND: hash          # deterministic, no model download in CI
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - run: pip install -r requirements-dev.txt
+      - run: psql "$DATABASE_URL" -f infra/db/init.sql
+      # Unit gate covers pure logic; Docker/DB-bound modules (harness server,
+      # asyncpg pool) are exercised by the integration suite (RUN_INTEGRATION=1).
+      - run: pytest tests/unit --cov=services --cov-fail-under=60 --tb=short
+
+  build:
+    runs-on: ubuntu-latest
+    needs: test
+    if: github.ref == 'refs/heads/main'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: us-east-1
+      - run: |
+          aws ecr get-login-password | docker login --username AWS --password-stdin "$ECR_REGISTRY"
+          docker build -f services/api/Dockerfile -t "$ECR_REGISTRY/prodrescue:${{ github.sha }}" .
+          docker push "$ECR_REGISTRY/prodrescue:${{ github.sha }}"
+        env:
+          ECR_REGISTRY: ${{ secrets.ECR_REGISTRY }}
+
+  deploy:
+    runs-on: ubuntu-latest
+    needs: build
+    if: github.ref == 'refs/heads/main'
+    steps:
+      - run: |
+          kubectl set image deployment/api api="$ECR_REGISTRY/prodrescue:${{ github.sha }}" \
+            --namespace prodrescue
+          kubectl rollout status deployment/api --namespace prodrescue
+        env:
+          ECR_REGISTRY: ${{ secrets.ECR_REGISTRY }}

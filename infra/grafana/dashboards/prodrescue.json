@@ -1,0 +1,120 @@
+{
+  "uid": "prodrescue",
+  "title": "ProdRescue — Self-Healing SRE",
+  "tags": ["prodrescue"],
+  "timezone": "browser",
+  "schemaVersion": 39,
+  "version": 1,
+  "refresh": "10s",
+  "time": { "from": "now-6h", "to": "now" },
+  "templating": { "list": [] },
+  "annotations": { "list": [] },
+  "panels": [
+    {
+      "id": 1,
+      "title": "Patch success rate (%)",
+      "type": "stat",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 6, "w": 8, "x": 0, "y": 0 },
+      "fieldConfig": { "defaults": { "unit": "percent", "min": 0, "max": 100 }, "overrides": [] },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "expr": "sum(rate(prodrescue_patches_total{outcome=\"pass\"}[5m])) / clamp_min(sum(rate(prodrescue_patches_total[5m])), 1) * 100"
+        }
+      ]
+    },
+    {
+      "id": 2,
+      "title": "Mean / P95 time to PR (s)",
+      "type": "timeseries",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 6, "w": 8, "x": 8, "y": 0 },
+      "fieldConfig": { "defaults": { "unit": "s" }, "overrides": [] },
+      "targets": [
+        {
+          "refId": "A",
+          "legendFormat": "p50",
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "expr": "histogram_quantile(0.50, sum by (le) (rate(prodrescue_time_to_pr_seconds_bucket[5m])))"
+        },
+        {
+          "refId": "B",
+          "legendFormat": "p95",
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "expr": "histogram_quantile(0.95, sum by (le) (rate(prodrescue_time_to_pr_seconds_bucket[5m])))"
+        }
+      ]
+    },
+    {
+      "id": 3,
+      "title": "Harness duration p50 / p95 (s)",
+      "type": "timeseries",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 6, "w": 8, "x": 16, "y": 0 },
+      "fieldConfig": { "defaults": { "unit": "s" }, "overrides": [] },
+      "targets": [
+        {
+          "refId": "A",
+          "legendFormat": "p50",
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "expr": "histogram_quantile(0.50, sum by (le) (rate(prodrescue_harness_duration_seconds_bucket[5m])))"
+        },
+        {
+          "refId": "B",
+          "legendFormat": "p95",
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "expr": "histogram_quantile(0.95, sum by (le) (rate(prodrescue_harness_duration_seconds_bucket[5m])))"
+        }
+      ]
+    },
+    {
+      "id": 4,
+      "title": "Retry count distribution",
+      "type": "barchart",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 7, "w": 8, "x": 0, "y": 6 },
+      "fieldConfig": { "defaults": {}, "overrides": [] },
+      "targets": [
+        {
+          "refId": "A",
+          "format": "heatmap",
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "expr": "sum by (le) (increase(prodrescue_retry_count_bucket[1h]))"
+        }
+      ]
+    },
+    {
+      "id": 5,
+      "title": "Coverage delta (median)",
+      "type": "timeseries",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 7, "w": 8, "x": 8, "y": 6 },
+      "fieldConfig": { "defaults": { "unit": "percent" }, "overrides": [] },
+      "targets": [
+        {
+          "refId": "A",
+          "legendFormat": "p50 coverage delta",
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "expr": "histogram_quantile(0.50, sum by (le) (rate(prodrescue_coverage_delta_bucket[5m])))"
+        }
+      ]
+    },
+    {
+      "id": 6,
+      "title": "Active pipelines",
+      "type": "stat",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 7, "w": 8, "x": 16, "y": 6 },
+      "fieldConfig": { "defaults": { "unit": "short" }, "overrides": [] },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "expr": "sum(prodrescue_active_pipelines)"
+        }
+      ]
+    }
+  ]
+}

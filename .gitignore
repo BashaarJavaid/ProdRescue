@@ -1,0 +1,28 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+.mypy_cache/
+.ruff_cache/
+.pytest_cache/
+htmlcov/
+.coverage
+coverage.json
+
+# Env / secrets
+.env
+*.local
+
+# OS
+.DS_Store
+
+# Harness scratch + dry-run PR artifacts
+/tmp/harness/
+dryrun_prs/
+
+# Terraform
+infra/.terraform/
+*.tfstate
+*.tfstate.*

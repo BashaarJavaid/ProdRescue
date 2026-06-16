@@ -1,0 +1,99 @@
+# ProdRescue local stack — one `docker compose up` runs everything.
+# LLM is external (Xiaomi MiMo-V2.5-Pro via LLM_BASE_URL); no Ollama service.
+
+x-app-env: &app-env
+  DATABASE_URL: postgresql://postgres:postgres@postgres:5432/prodrescue
+  RABBITMQ_URL: amqp://guest:guest@rabbitmq:5672//
+  REDIS_URL: redis://redis:6379/0
+  LLM_BASE_URL: ${LLM_BASE_URL:-http://host.docker.internal:8080/v1}
+  LLM_API_KEY: ${LLM_API_KEY:-changeme}
+  LLM_MODEL: ${LLM_MODEL:-MiMo-V2.5-Pro}
+  EMBED_BACKEND: ${EMBED_BACKEND:-sentence-transformers}
+  EMBED_MODEL: ${EMBED_MODEL:-BAAI/bge-small-en-v1.5}
+  EMBED_DIM: ${EMBED_DIM:-384}
+  GITHUB_TOKEN: ${GITHUB_TOKEN:-}
+  REPO_FULL_NAME: ${REPO_FULL_NAME:-youruser/prodrescue-sample-target}
+  HARNESS_MCP_URL: http://harness_mcp:8001/mcp
+  LOGS_DB_MCP_URL: http://logs_db_mcp:8002/mcp
+  LANGSMITH_API_KEY: ${LANGSMITH_API_KEY:-}
+  LANGSMITH_PROJECT: ${LANGSMITH_PROJECT:-prodrescue}
+
+services:
+  api:
+    build:
+      context: .
+      dockerfile: services/api/Dockerfile
+    ports: ["8000:8000"]
+    environment: *app-env
+    depends_on: [postgres, redis, rabbitmq]
+
+  worker:
+    build:
+      context: .
+      dockerfile: services/api/Dockerfile
+    command: celery -A services.api.tasks worker --loglevel=info --concurrency=2
+    environment:
+      <<: *app-env
+      WORKER_METRICS_PORT: "9100"
+    depends_on: [postgres, redis, rabbitmq, harness_mcp, logs_db_mcp]
+
+  logs_db_mcp:
+    build:
+      context: .
+      dockerfile: services/api/Dockerfile
+    command: python -m services.mcp_servers.logs_db.server
+    ports: ["8002:8002"]
+    environment: *app-env
+    depends_on: [postgres]
+
+  harness_mcp:
+    build:
+      context: .
+      dockerfile: services/mcp_servers/harness/Dockerfile
+    ports: ["8001:8001"]
+    environment:
+      TARGET_REPO_DIR: /app/sample_target
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock   # Docker-in-Docker via host daemon
+      - /tmp/harness:/tmp/harness                    # shared path so bind mounts resolve on host
+      - ./sample_target:/app/sample_target:ro        # the repo under test
+
+  rabbitmq:
+    image: rabbitmq:3-management
+    ports: ["5672:5672", "15672:15672"]   # 15672 = management UI
+
+  redis:
+    image: redis:7-alpine
+    ports: ["6379:6379"]
+
+  postgres:
+    image: timescale/timescaledb-ha:pg15
+    environment:
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: prodrescue
+    ports: ["5432:5432"]
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./infra/db/init.sql:/docker-entrypoint-initdb.d/init.sql:ro
+
+  prometheus:
+    image: prom/prometheus:latest
+    ports: ["9090:9090"]
+    volumes:
+      - ./infra/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+
+  grafana:
+    image: grafana/grafana:latest
+    ports: ["3000:3000"]
+    environment:
+      GF_SECURITY_ADMIN_PASSWORD: admin
+      GF_AUTH_ANONYMOUS_ENABLED: "true"
+    volumes:
+      - grafana_data:/var/lib/grafana
+      - ./infra/grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./infra/grafana/dashboards:/var/lib/grafana/dashboards:ro
+    depends_on: [prometheus]
+
+volumes:
+  postgres_data:
+  grafana_data:
