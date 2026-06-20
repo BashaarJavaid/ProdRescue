@@ -21,8 +21,12 @@ Also write a conftest.py pytest fixture that:
 The fixture must reproduce the exact production conditions that caused the crash.
 
 Output rules:
-- patch_diff MUST be a valid unified diff (--- a/<path> / +++ b/<path> / @@ hunks),
-  applyable with `git apply` from the repo root.
+- patched_file MUST be the COMPLETE contents of the fixed source file, byte-for-byte
+  as it should appear after the fix — every unchanged line included, nothing elided.
+  This is applied verbatim, so it must be the whole file, not a snippet.
+- patch_diff MUST be a valid unified diff (--- a/<path> / +++ b/<path> / @@ hunks)
+  describing the same change (used for the PR body and as a fallback).
+- patched_file and patch_diff MUST describe the identical fix.
 - conftest MUST be valid, self-contained Python.
 - explanation is one or two sentences for the PR body.
 If a previous patch failed, you MUST address the reported failed assertions in the new patch.

@@ -26,3 +26,7 @@ dryrun_prs/
 infra/.terraform/
 *.tfstate
 *.tfstate.*
+
+# Project notes (local only)
+CLAUDE.md
+PRODRESCUE.md

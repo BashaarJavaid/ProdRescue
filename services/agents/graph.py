@@ -68,6 +68,12 @@ async def run_graph(log_payload: dict) -> dict:
             final_state = await graph.ainvoke(initial_state, config=config)
     finally:
         ACTIVE_PIPELINES.dec()
+        # ponytail: asyncpg pool is bound to the loop that created it. Celery runs
+        # asyncio.run() (a fresh loop) per task, so close it here or task #2 reuses
+        # a dead-loop pool. Per-task pool churn is one pipeline/task — negligible.
+        from services.api.database import db
+
+        await db.close()
 
     RETRY_COUNT.observe(final_state.get("retry_count", 0))
     return {

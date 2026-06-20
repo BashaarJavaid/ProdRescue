@@ -76,6 +76,7 @@ async def dev_node(state: AgentState) -> dict:
     )
 
     return {
+        "patched_file": result.patched_file,
         "patch": result.patch_diff,
         "fixture": result.conftest,
         "explanation": result.explanation,
@@ -95,7 +96,13 @@ async def qa_node(state: AgentState) -> dict:
 
         await mcp_call(
             "qa", "harness", "apply_patch",
-            {"stack_id": stack_id, "patch_diff": state["patch"], "conftest": state["fixture"]},
+            {
+                "stack_id": stack_id,
+                "patched_file": state.get("patched_file", ""),
+                "file_path": spec["file_path"],
+                "patch_diff": state["patch"],
+                "conftest": state["fixture"],
+            },
         )
 
         pytest_result = await asyncio.wait_for(
@@ -165,11 +172,15 @@ async def pr_node(state: AgentState) -> dict:
 
     await mcp_call("pr", "github", "create_branch", {"name": branch})
 
-    # Push the patched file. Fetch current content, apply the diff, upload result.
-    source = await mcp_call("pr", "github", "get_file_contents", {"path": spec["file_path"]})
-    from services.agents.patching import apply_unified_diff
+    # Push the patched file. The Dev agent emits the full fixed file, so we upload
+    # it directly — no diff-apply on the PR path. Fall back to applying the diff
+    # only if the full file is somehow missing.
+    patched = state.get("patched_file")
+    if not patched:
+        source = await mcp_call("pr", "github", "get_file_contents", {"path": spec["file_path"]})
+        from services.agents.patching import apply_unified_diff
 
-    patched = apply_unified_diff(source["content"], state["patch"], spec["file_path"])
+        patched = apply_unified_diff(source["content"], state["patch"], spec["file_path"])
     await mcp_call(
         "pr", "github", "put_file",
         {

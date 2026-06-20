@@ -60,6 +60,7 @@ class TriageOutput(BaseModel):
 class PatchOutput(BaseModel):
     """Structured LLM output from the Dev node."""
 
-    patch_diff: str  # unified diff
+    patched_file: str  # full contents of the fixed source file (primary, apply-free)
+    patch_diff: str  # unified diff (for the human-readable PR body + fallback apply)
     conftest: str  # full conftest.py content
     explanation: str  # short summary for the PR body

@@ -21,7 +21,7 @@
         {
           "refId": "A",
           "datasource": { "type": "prometheus", "uid": "prometheus" },
-          "expr": "sum(rate(prodrescue_patches_total{outcome=\"pass\"}[5m])) / clamp_min(sum(rate(prodrescue_patches_total[5m])), 1) * 100"
+          "expr": "100 * sum(prodrescue_patches_total{outcome=\"pass\"}) / sum(prodrescue_patches_total)"
         }
       ]
     },

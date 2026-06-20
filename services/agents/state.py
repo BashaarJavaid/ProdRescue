@@ -20,7 +20,8 @@ class AgentState(TypedDict, total=False):
     harness_spec: dict   # HarnessSpec.model_dump()
 
     # Dev outputs
-    patch: str           # unified diff
+    patched_file: str    # full fixed source file (applied verbatim, no diff)
+    patch: str           # unified diff (PR body + fallback)
     fixture: str         # conftest.py content
     explanation: str
 

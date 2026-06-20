@@ -45,5 +45,6 @@ def test_triage_and_patch_outputs():
         harness_spec=HarnessSpec(file_path="f.py"),
     )
     assert t.harness_spec.file_path == "f.py"
-    p = PatchOutput(patch_diff="d", conftest="c", explanation="e")
+    p = PatchOutput(patched_file="full", patch_diff="d", conftest="c", explanation="e")
     assert p.patch_diff == "d"
+    assert p.patched_file == "full"

@@ -5,7 +5,9 @@ FROM python:3.11-slim
 WORKDIR /app
 ENV PYTHONPATH=/app PYTHONUNBUFFERED=1
 
-RUN apt-get update && apt-get install -y --no-install-recommends curl \
+# git + patch are the fallback path for the PR node's diff-apply (the common
+# path uses the full file the Dev agent emits and needs neither).
+RUN apt-get update && apt-get install -y --no-install-recommends curl git patch \
     && rm -rf /var/lib/apt/lists/*
 
 COPY requirements.txt .

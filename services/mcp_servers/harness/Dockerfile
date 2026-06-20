@@ -7,7 +7,7 @@ WORKDIR /app
 ENV PYTHONPATH=/app PYTHONUNBUFFERED=1
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
-        ca-certificates curl gnupg git \
+        ca-certificates curl gnupg git patch \
     && install -m 0755 -d /etc/apt/keyrings \
     && curl -fsSL https://download.docker.com/linux/debian/gpg \
         | gpg --dearmor -o /etc/apt/keyrings/docker.gpg \
@@ -21,7 +21,7 @@ https://download.docker.com/linux/debian $(. /etc/os-release && echo $VERSION_CO
 # Lean dependency set — the harness doesn't need the LLM / embedding stack.
 RUN pip install --no-cache-dir \
         "mcp==1.27.2" "pyyaml==6.0.2" "docker==7.1.0" \
-        "pydantic==2.10.4" "pydantic-settings==2.7.1"
+        "pydantic==2.13.4" "pydantic-settings==2.7.1"
 
 COPY services/ services/
 

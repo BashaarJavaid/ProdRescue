@@ -31,10 +31,14 @@ services:
     build:
       context: .
       dockerfile: services/api/Dockerfile
-    command: celery -A services.api.tasks worker --loglevel=info --concurrency=2
+    # concurrency=1: prometheus_client metrics are per-process; with one pool worker the
+    # metrics HTTP server and the task share a registry so emitted metrics are scrapeable.
+    command: celery -A services.api.tasks worker --loglevel=info --concurrency=1
     environment:
       <<: *app-env
       WORKER_METRICS_PORT: "9100"
+    volumes:
+      - ./sample_target:/app/sample_target:ro   # dry-run github get_file_contents reads source here
     depends_on: [postgres, redis, rabbitmq, harness_mcp, logs_db_mcp]
 
   logs_db_mcp:

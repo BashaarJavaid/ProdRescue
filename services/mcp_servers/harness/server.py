@@ -35,7 +35,14 @@ async def _run(cmd: list[str], cwd: str | None = None, timeout: float = 600) -> 
         stdout=asyncio.subprocess.PIPE,
         stderr=asyncio.subprocess.PIPE,
     )
-    out, err = await asyncio.wait_for(proc.communicate(), timeout=timeout)
+    try:
+        out, err = await asyncio.wait_for(proc.communicate(), timeout=timeout)
+    except TimeoutError:
+        # Kill the abandoned `docker compose exec` client so it doesn't linger;
+        # teardown's `compose down` then removes the container running pytest.
+        proc.kill()
+        await proc.wait()
+        raise
     return proc.returncode or 0, out.decode(errors="replace"), err.decode(errors="replace")
 
 
@@ -85,7 +92,13 @@ async def spin_up_stack(spec: dict) -> dict:
     return {"stack_id": stack_id, "baseline_cov": stack["baseline_cov"]}
 
 
-async def apply_patch(stack_id: str, patch_diff: str, conftest: str = "") -> dict:
+async def apply_patch(
+    stack_id: str,
+    patch_diff: str = "",
+    conftest: str = "",
+    patched_file: str = "",
+    file_path: str = "",
+) -> dict:
     stack = ACTIVE_STACKS[stack_id]
     stack_dir = Path(stack["dir"])
 
@@ -93,16 +106,47 @@ async def apply_patch(stack_id: str, patch_diff: str, conftest: str = "") -> dic
         (stack_dir / "tests").mkdir(exist_ok=True)
         (stack_dir / "tests" / "conftest.py").write_text(conftest)
 
+    # Primary path: the Dev agent gives the full fixed file — write it verbatim.
+    # No diff to reject, no line-number drift. The diff is only a fallback.
+    if patched_file and file_path:
+        (stack_dir / file_path).write_text(patched_file)
+        return {"applied": True, "method": "full_file"}
+
+    return await _apply_diff(stack_dir, patch_diff)
+
+
+async def _apply_diff(stack_dir: Path, patch_diff: str) -> dict:
+    """Fallback: git apply, then patch --fuzz=3 (line-number-tolerant)."""
     diff_text = patch_diff if patch_diff.endswith("\n") else patch_diff + "\n"
-    proc = await asyncio.create_subprocess_exec(
+    data = diff_text.encode()
+
+    git = await asyncio.create_subprocess_exec(
         "git", "apply", "--unsafe-paths", "-p1", "-",
         cwd=str(stack_dir),
         stdin=asyncio.subprocess.PIPE,
         stdout=asyncio.subprocess.PIPE,
         stderr=asyncio.subprocess.PIPE,
     )
-    _, err = await proc.communicate(input=diff_text.encode())
-    return {"applied": proc.returncode == 0, "stderr": err.decode(errors="replace")}
+    _, git_err = await git.communicate(input=data)
+    if git.returncode == 0:
+        return {"applied": True, "method": "git_apply"}
+
+    # LLM diffs often have wrong line numbers/context; --fuzz tolerates drift.
+    patch = await asyncio.create_subprocess_exec(
+        "patch", "-p1", "--fuzz=3", "--no-backup-if-mismatch",
+        cwd=str(stack_dir),
+        stdin=asyncio.subprocess.PIPE,
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.PIPE,
+    )
+    _, patch_err = await patch.communicate(input=data)
+    if patch.returncode == 0:
+        return {"applied": True, "method": "patch_fuzz"}
+
+    return {
+        "applied": False,
+        "stderr": git_err.decode(errors="replace") + patch_err.decode(errors="replace"),
+    }
 
 
 async def run_pytest(stack_id: str, timeout: int = 120) -> dict:

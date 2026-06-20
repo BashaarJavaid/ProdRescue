@@ -17,7 +17,9 @@ def stub_pipeline(monkeypatch):
                 harness_spec=HarnessSpec(file_path="src/payments/processor.py"),
             )
         counters["dev"] += 1
-        return PatchOutput(patch_diff="<diff>", conftest="<c>", explanation="fix")
+        return PatchOutput(
+            patched_file="patched", patch_diff="<diff>", conftest="<c>", explanation="fix",
+        )
 
     async def fake_mcp(agent, server, tool, args=None):
         if tool == "semantic_search_logs":

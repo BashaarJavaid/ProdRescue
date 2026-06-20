@@ -20,13 +20,22 @@ def apply_unified_diff(original: str, diff: str, rel_path: str) -> str:
 
         subprocess.run(["git", "init", "-q"], cwd=root, check=True)
         diff_text = diff if diff.endswith("\n") else diff + "\n"
-        proc = subprocess.run(
+
+        git = subprocess.run(
             ["git", "apply", "--unsafe-paths", "-p1", "-"],
-            cwd=root,
-            input=diff_text,
-            text=True,
-            capture_output=True,
+            cwd=root, input=diff_text, text=True, capture_output=True,
         )
-        if proc.returncode != 0:
-            raise ValueError(f"git apply failed: {proc.stderr.strip()}")
+        if git.returncode == 0:
+            return target.read_text()
+
+        # LLM diffs often have wrong line numbers/context; --fuzz tolerates drift.
+        patch = subprocess.run(
+            ["patch", "-p1", "--fuzz=3", "--no-backup-if-mismatch"],
+            cwd=root, input=diff_text, text=True, capture_output=True,
+        )
+        if patch.returncode != 0:
+            raise ValueError(
+                f"diff did not apply (git: {git.stderr.strip()}; "
+                f"patch: {patch.stderr.strip()})"
+            )
         return target.read_text()

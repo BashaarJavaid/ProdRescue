@@ -1,7 +1,7 @@
 # ── Web / ingestion ─────────────────────────────────────────────
 fastapi==0.137.1
 uvicorn[standard]==0.34.0
-pydantic==2.10.4
+pydantic==2.13.4  # >=2.11 required by mcp==1.27.2
 pydantic-settings==2.7.1
 
 # ── Async task queue ────────────────────────────────────────────
@@ -26,7 +26,9 @@ langsmith==0.2.10
 mcp==1.27.2
 
 # ── Embeddings (optional heavy dep; hash backend used when absent)
-sentence-transformers==3.3.1
+# Pulls torch + ~5GB of unused CUDA wheels. Disabled for the hash-backend run.
+# Re-enable (ideally via the CPU-only torch index) for real embeddings.
+# sentence-transformers==3.3.1
 
 # ── Harness engineering ─────────────────────────────────────────
 docker==7.1.0

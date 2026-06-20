@@ -14,7 +14,10 @@ def stub(monkeypatch):
 
     async def fake_structured(response_model, system, user, **kw):
         calls["user"] = user
-        return PatchOutput(patch_diff="--- a\n+++ b\n", conftest="x=1", explanation="fix")
+        return PatchOutput(
+            patched_file="def charge(order):\n    return 0\n",
+            patch_diff="--- a\n+++ b\n", conftest="x=1", explanation="fix",
+        )
 
     monkeypatch.setattr(nodes, "mcp_call", fake_mcp)
     monkeypatch.setattr(nodes, "structured", fake_structured)
@@ -28,6 +31,7 @@ async def test_dev_node_first_attempt(stub):
     }
     out = await nodes.dev_node(state)
     assert out["patch"] == "--- a\n+++ b\n"
+    assert out["patched_file"] == "def charge(order):\n    return 0\n"
     assert out["fixture"] == "x=1"
     assert stub["mcp"] == [("dev", "github", "get_file_contents")]
     assert "PREVIOUS PATCH FAILED" not in stub["user"]
