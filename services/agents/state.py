@@ -24,6 +24,7 @@ class AgentState(TypedDict, total=False):
     patch: str           # unified diff (PR body + fallback)
     fixture: str         # conftest.py content
     explanation: str
+    original_len: int    # length of the pre-patch source (for the scope guard)
 
     # QA outputs
     harness_result: dict  # HarnessResult.model_dump()

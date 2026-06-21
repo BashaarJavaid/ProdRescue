@@ -8,11 +8,18 @@ x-app-env: &app-env
   LLM_BASE_URL: ${LLM_BASE_URL:-http://host.docker.internal:8080/v1}
   LLM_API_KEY: ${LLM_API_KEY:-changeme}
   LLM_MODEL: ${LLM_MODEL:-MiMo-V2.5-Pro}
+  LLM_TIMEOUT_SECONDS: ${LLM_TIMEOUT_SECONDS:-120}
+  MAX_RETRIES: ${MAX_RETRIES:-3}
   EMBED_BACKEND: ${EMBED_BACKEND:-sentence-transformers}
   EMBED_MODEL: ${EMBED_MODEL:-BAAI/bge-small-en-v1.5}
   EMBED_DIM: ${EMBED_DIM:-384}
   GITHUB_TOKEN: ${GITHUB_TOKEN:-}
   REPO_FULL_NAME: ${REPO_FULL_NAME:-youruser/prodrescue-sample-target}
+  AUTO_PR_DRAFT: ${AUTO_PR_DRAFT:-true}
+  PR_REVIEWERS: ${PR_REVIEWERS:-}
+  INGEST_API_KEY: ${INGEST_API_KEY:-}
+  MAX_ACTIVE_PIPELINES: ${MAX_ACTIVE_PIPELINES:-10}
+  DEDUP_WINDOW_SECONDS: ${DEDUP_WINDOW_SECONDS:-600}
   HARNESS_MCP_URL: http://harness_mcp:8001/mcp
   LOGS_DB_MCP_URL: http://logs_db_mcp:8002/mcp
   LANGSMITH_API_KEY: ${LANGSMITH_API_KEY:-}
@@ -26,6 +33,12 @@ services:
     ports: ["8000:8000"]
     environment: *app-env
     depends_on: [postgres, redis, rabbitmq]
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://localhost:8000/ready').status==200 else 1)"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
 
   worker:
     build:
@@ -39,6 +52,7 @@ services:
       WORKER_METRICS_PORT: "9100"
     volumes:
       - ./sample_target:/app/sample_target:ro   # dry-run github get_file_contents reads source here
+      - ./dryrun_prs:/app/dryrun_prs            # dry-run PR artifacts visible on the host
     depends_on: [postgres, redis, rabbitmq, harness_mcp, logs_db_mcp]
 
   logs_db_mcp:

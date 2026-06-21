@@ -41,3 +41,90 @@ async def test_github_dryrun_pull_request(monkeypatch, tmp_path):
                         {"title": "t", "body": "b", "branch": "prodrescue/x", "patch_diff": "d"})
     assert pr["dry_run"] is True
     assert (tmp_path / "dryrun" / "prodrescue_x.md").exists()
+
+
+async def test_github_dryrun_pull_request_idempotent(monkeypatch, tmp_path):
+    # A re-run of the same incident branch must not write/return a second PR.
+    from services.agents import mcp_clients
+    monkeypatch.setattr(mcp_clients.settings, "github_token", "")
+    monkeypatch.setattr(mcp_clients, "_DRYRUN_DIR", tmp_path / "dryrun")
+    args = {"title": "t", "body": "b", "branch": "prodrescue/x", "patch_diff": "d"}
+    await mcp_call("pr", "github", "create_pull_request", args)
+    second = await mcp_call("pr", "github", "create_pull_request", args)
+    assert second["deduplicated"] is True
+
+
+# ── Real GitHub path (B2 draft+reviewers, B3 SHA-conflict) with a fake PyGithub ──
+def _patch_github(monkeypatch, repo):
+    import github
+    from services.agents import mcp_clients
+    monkeypatch.setattr(mcp_clients.settings, "github_token", "tok")
+    monkeypatch.setattr(mcp_clients.settings, "repo_full_name", "o/r")
+    monkeypatch.setattr(github, "Github", lambda *a, **k: type("GH", (), {"get_repo": lambda s, n: repo})())
+
+
+async def test_real_pr_is_draft_and_requests_reviewers(monkeypatch):
+    pytest.importorskip("github")
+    from services.agents import mcp_clients
+    monkeypatch.setattr(mcp_clients.settings, "auto_pr_draft", True)
+    monkeypatch.setattr(mcp_clients.settings, "pr_reviewers", "alice, bob")
+    seen = {}
+
+    class FakePR:
+        html_url = "https://github.com/o/r/pull/7"
+        number = 7
+
+        def create_review_request(self, reviewers):
+            seen["reviewers"] = reviewers
+
+    class FakeRepo:
+        owner = type("O", (), {"login": "o"})()
+        default_branch = "main"
+
+        def get_pulls(self, state, head):
+            return []
+
+        def create_pull(self, title, body, head, base, draft):
+            seen["draft"] = draft
+            return FakePR()
+
+    _patch_github(monkeypatch, FakeRepo())
+    out = await mcp_call("pr", "github", "create_pull_request",
+                         {"title": "t", "body": "b", "branch": "prodrescue/x"})
+    assert out["draft"] is True and seen["draft"] is True
+    assert seen["reviewers"] == ["alice", "bob"]
+
+
+async def test_put_file_raises_on_conflict(monkeypatch):
+    pytest.importorskip("github")
+    from github import GithubException
+
+    class FakeRepo:
+        def get_contents(self, path, ref):
+            raise GithubException(409, {"message": "conflict"}, {})
+
+        def create_file(self, *a, **k):
+            raise AssertionError("must not silently create on a real conflict")
+
+    _patch_github(monkeypatch, FakeRepo())
+    with pytest.raises(GithubException):
+        await mcp_call("pr", "github", "put_file",
+                       {"branch": "b", "path": "p", "content": "c"})
+
+
+async def test_put_file_creates_when_absent(monkeypatch):
+    pytest.importorskip("github")
+    from github import GithubException
+    seen = {}
+
+    class FakeRepo:
+        def get_contents(self, path, ref):
+            raise GithubException(404, {"message": "not found"}, {})
+
+        def create_file(self, path, message, content, branch):
+            seen["created"] = True
+
+    _patch_github(monkeypatch, FakeRepo())
+    out = await mcp_call("pr", "github", "put_file",
+                         {"branch": "b", "path": "p", "content": "c"})
+    assert out["created"] is True and seen["created"] is True

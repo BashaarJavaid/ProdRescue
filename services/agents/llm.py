@@ -36,6 +36,7 @@ async def structured(
 ) -> T:
     """Single structured-output LLM call. Returns an instance of ``response_model``."""
     client = get_client()
+    extra = {} if settings.llm_temperature is None else {"temperature": settings.llm_temperature}
     return await client.chat.completions.create(
         model=model or settings.llm_model,
         response_model=response_model,
@@ -44,4 +45,5 @@ async def structured(
             {"role": "system", "content": system},
             {"role": "user", "content": user},
         ],
+        **extra,
     )

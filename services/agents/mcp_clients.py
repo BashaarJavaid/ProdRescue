@@ -101,13 +101,18 @@ def _github_dryrun(tool: str, args: dict) -> dict:
     if tool == "create_pull_request":
         branch = args.get("branch", "prodrescue-fix")
         path = _DRYRUN_DIR / f"{branch.replace('/', '_')}.md"
+        if path.exists():
+            # Idempotent: a re-run of the same incident reuses the existing PR.
+            return {"html_url": f"(dry-run) {path}", "dry_run": True, "deduplicated": True}
         path.write_text(
             f"# {args.get('title', 'ProdRescue PR')}\n\n"
-            f"branch: {branch}\nbase: {args.get('base', 'main')}\n\n"
+            f"branch: {branch}\nbase: {args.get('base', 'main')}\n"
+            f"draft: {str(settings.auto_pr_draft).lower()}\n"
+            f"reviewers: {settings.pr_reviewers or '(none)'}\n\n"
             f"{args.get('body', '')}\n\n"
             f"---\n\n```diff\n{args.get('patch_diff', '')}\n```\n"
         )
-        return {"html_url": f"(dry-run) {path}", "dry_run": True}
+        return {"html_url": f"(dry-run) {path}", "dry_run": True, "draft": settings.auto_pr_draft}
     return {"ok": True, "dry_run": True, "tool": tool}
 
 
@@ -120,6 +125,7 @@ def _github_real(tool: str, args: dict) -> dict:
 
     if tool == "get_file_contents":
         content = repo.get_contents(args["path"], ref=args.get("ref") or repo.default_branch)
+        assert not isinstance(content, list), f"{args['path']} is a directory, not a file"
         return {"path": args["path"], "content": content.decoded_content.decode()}
 
     if tool == "create_branch":
@@ -133,24 +139,46 @@ def _github_real(tool: str, args: dict) -> dict:
         return {"branch": args["name"], "base": base}
 
     if tool == "put_file":
-        # Create/update a single file's full contents on a branch.
+        # Create/update a single file's full contents on a branch. Distinguish
+        # "file absent" (→ create) from a real error like a SHA conflict (→ raise,
+        # don't silently overwrite — that's the base-SHA pin).
         branch = args["branch"]
         path = args["path"]
         message = args.get("message", "ProdRescue patch")
         try:
             existing = repo.get_contents(path, ref=branch)
-            repo.update_file(path, message, args["content"], existing.sha, branch=branch)
-        except GithubException:
-            repo.create_file(path, message, args["content"], branch=branch)
+        except GithubException as exc:
+            if exc.status == 404:
+                repo.create_file(path, message, args["content"], branch=branch)
+                return {"path": path, "branch": branch, "created": True}
+            raise
+        assert not isinstance(existing, list), f"{path} is a directory, not a file"
+        repo.update_file(path, message, args["content"], existing.sha, branch=branch)
         return {"path": path, "branch": branch}
 
     if tool == "create_pull_request":
+        head = args["branch"]
+        # Idempotent: a re-run (e.g. Celery acks_late re-queue) must not open a
+        # second PR for the same incident branch.
+        open_prs = list(repo.get_pulls(state="open", head=f"{repo.owner.login}:{head}"))
+        if open_prs:
+            existing_pr = open_prs[0]
+            return {"html_url": existing_pr.html_url, "number": existing_pr.number,
+                    "dry_run": False, "deduplicated": True}
         pr = repo.create_pull(
             title=args["title"],
             body=args.get("body", ""),
-            head=args["branch"],
+            head=head,
             base=args.get("base") or repo.default_branch,
+            draft=settings.auto_pr_draft,
         )
-        return {"html_url": pr.html_url, "number": pr.number, "dry_run": False}
+        reviewers = [r.strip() for r in settings.pr_reviewers.split(",") if r.strip()]
+        if reviewers:
+            try:
+                pr.create_review_request(reviewers=reviewers)
+            except GithubException:
+                pass  # bad login / can't review own PR — don't fail the pipeline
+        return {"html_url": pr.html_url, "number": pr.number,
+                "dry_run": False, "draft": settings.auto_pr_draft}
 
     raise ValueError(f"unknown github tool: {tool}")

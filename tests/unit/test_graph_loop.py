@@ -67,6 +67,30 @@ async def test_retry_then_pass_opens_pr(stub_pipeline):
     assert final["retry_count"] == 2
 
 
+async def test_out_of_scope_patch_never_opens_pr(stub_pipeline, monkeypatch):
+    # A ballooning patch fails the scope guard every retry → give up, no PR, no spin.
+    counters, _ = stub_pipeline
+
+    async def balloon(model, system, user, **kw):
+        if model is TriageOutput:
+            return TriageOutput(
+                root_cause="x", affected_file="src/payments/processor.py",
+                harness_spec=HarnessSpec(file_path="src/payments/processor.py"),
+            )
+        return PatchOutput(patched_file="X" * 1000, patch_diff="", conftest="", explanation="")
+
+    monkeypatch.setattr(nodes, "structured", balloon)
+    graph = build_graph(checkpointer=None)
+    final = await graph.ainvoke(
+        {"log": {"service": "payments", "message": "boom", "log_id": "L3"},
+         "log_id": "L3", "retry_count": 0, "messages": []},
+        config={"configurable": {"thread_id": "L3"}},
+    )
+    assert final.get("pr_url") is None
+    assert final["retry_count"] == 3
+    assert counters["run_pytest"] == 0  # guard short-circuits before any Docker spin
+
+
 async def test_persistent_failure_gives_up(stub_pipeline):
     counters, outcomes = stub_pipeline
     outcomes["sequence"] = [False]  # never passes

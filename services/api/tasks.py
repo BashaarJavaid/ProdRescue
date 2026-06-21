@@ -32,6 +32,9 @@ app.conf.update(
 def _start_metrics_server(**_kwargs) -> None:
     from prometheus_client import start_http_server
 
+    from services.logging_setup import setup_logging
+
+    setup_logging()
     try:
         start_http_server(settings.worker_metrics_port)
     except OSError:

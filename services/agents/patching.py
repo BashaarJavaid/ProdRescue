@@ -5,9 +5,42 @@ Shells out to ``git apply`` inside a throwaway temp repo so standard
 """
 from __future__ import annotations
 
+import re
 import subprocess
 import tempfile
 from pathlib import Path
+
+_DIFF_TARGET = re.compile(r"^\+\+\+ b/(.+)$", re.M)
+
+
+def check_patch_scope(
+    file_path: str,
+    patched_file: str,
+    original_len: int,
+    patch_diff: str,
+    max_growth: float,
+) -> str | None:
+    """Return a rejection reason if the patch is out of scope, else None.
+
+    Cheap guards before we spend a Docker stack on QA. The applied artifacts are
+    structurally scoped (full file → ``file_path``, fixture → ``conftest.py``), so
+    this mainly catches: (a) the LLM ballooning the file, and (b) a diff (PR body /
+    fallback apply) that edits other files or existing tests.
+
+    ponytail: a malicious conftest can still neutralize tests at runtime; detecting
+    that needs more than a static check. Upgrade path = run the pristine suite under
+    the patched conftest and require the same test ids to execute.
+    """
+    if original_len and len(patched_file) > original_len * max_growth:
+        ratio = len(patched_file) / original_len
+        return f"patched file grew {ratio:.1f}x (limit {max_growth}x)"
+
+    for target in _DIFF_TARGET.findall(patch_diff):
+        t = target.strip()
+        if t == file_path or t.endswith("conftest.py"):
+            continue
+        return f"diff touches out-of-scope path '{t}' (allowed: {file_path}, conftest.py)"
+    return None
 
 
 def apply_unified_diff(original: str, diff: str, rel_path: str) -> str:

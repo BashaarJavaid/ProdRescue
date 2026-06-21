@@ -197,12 +197,15 @@ async def teardown_stack(stack_id: str) -> dict:
     except (TimeoutError, OSError):
         pass
 
-    # Belt and suspenders: force-remove anything left on the stack network.
+    # Belt and suspenders: force-remove anything left in this compose project.
+    # (Filter by project label, not network — an isolated app runs network_mode=none
+    # and wouldn't match a network filter.)
     try:
         import docker
 
         client = docker.from_env()
-        for c in client.containers.list(all=True, filters={"network": f"harness_{stack_id}"}):
+        label = f"com.docker.compose.project={stack_id}"
+        for c in client.containers.list(all=True, filters={"label": label}):
             c.remove(force=True)
     except Exception:  # noqa: BLE001 — best-effort cleanup
         pass

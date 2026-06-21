@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import asyncio
 import time
+from typing import Any
 from uuid import uuid4
 
 from services.agents.llm import structured
@@ -20,6 +21,7 @@ from services.agents.prompts import (
 from services.agents.state import AgentState
 from services.agents.tracing import traceable
 from services.api.metrics import TIME_TO_PR, emit_prometheus_metrics
+from services.config import settings
 from services.schemas.models import HarnessResult, PatchOutput, TriageOutput
 
 
@@ -31,11 +33,14 @@ async def triage_node(state: AgentState) -> dict:
         {"query": log["message"], "top_k": 5},
     )
 
-    result: TriageOutput = await structured(
-        TriageOutput,
-        TRIAGE_SYSTEM_PROMPT,
-        f"Error log:\n{log}\n\nSimilar past incidents:\n{similar}\n\n"
-        "Produce a root cause analysis and HarnessSpec.",
+    result: TriageOutput = await asyncio.wait_for(
+        structured(
+            TriageOutput,
+            TRIAGE_SYSTEM_PROMPT,
+            f"Error log:\n{log}\n\nSimilar past incidents:\n{similar}\n\n"
+            "Produce a root cause analysis and HarnessSpec.",
+        ),
+        timeout=settings.llm_timeout_seconds,
     )
 
     return {
@@ -66,13 +71,16 @@ async def dev_node(state: AgentState) -> dict:
             "You MUST address these failures in the new patch."
         )
 
-    result: PatchOutput = await structured(
-        PatchOutput,
-        DEV_SYSTEM_PROMPT,
-        f"Root cause: {state['root_cause']}\n"
-        f"HarnessSpec: {spec}\n"
-        f"Source file ({spec['file_path']}):\n{source['content']}\n\n"
-        f"{retry_context}",
+    result: PatchOutput = await asyncio.wait_for(
+        structured(
+            PatchOutput,
+            DEV_SYSTEM_PROMPT,
+            f"Root cause: {state['root_cause']}\n"
+            f"HarnessSpec: {spec}\n"
+            f"Source file ({spec['file_path']}):\n{source['content']}\n\n"
+            f"{retry_context}",
+        ),
+        timeout=settings.llm_timeout_seconds,
     )
 
     return {
@@ -80,6 +88,7 @@ async def dev_node(state: AgentState) -> dict:
         "patch": result.patch_diff,
         "fixture": result.conftest,
         "explanation": result.explanation,
+        "original_len": len(source["content"]),
     }
 
 
@@ -90,42 +99,62 @@ async def qa_node(state: AgentState) -> dict:
     stack_id = None
     started = time.monotonic()
 
-    try:
-        spin = await mcp_call("qa", "harness", "spin_up_stack", {"spec": spec})
-        stack_id = spin["stack_id"]
+    # Cheap scope guard before spending a Docker stack: reject a patch that balloons
+    # the file or (via its diff) touches anything but the affected file + conftest.
+    from services.agents.patching import check_patch_scope
 
-        await mcp_call(
-            "qa", "harness", "apply_patch",
-            {
-                "stack_id": stack_id,
-                "patched_file": state.get("patched_file", ""),
-                "file_path": spec["file_path"],
-                "patch_diff": state["patch"],
-                "conftest": state["fixture"],
-            },
-        )
-
-        pytest_result = await asyncio.wait_for(
-            mcp_call("qa", "harness", "run_pytest", {"stack_id": stack_id}),
-            timeout=timeout,
-        )
-    except TimeoutError:
+    scope_reason = check_patch_scope(
+        spec["file_path"],
+        state.get("patched_file", ""),
+        state.get("original_len", 0),
+        state.get("patch", ""),
+        settings.max_patch_growth_ratio,
+    )
+    pytest_result: dict[str, Any]
+    if scope_reason:
         pytest_result = {
             "passed": False,
             "coverage_delta": -999.0,
-            "failed_assertions": ["Test run timed out"],
-            "duration_ms": int(timeout * 1000),
+            "failed_assertions": [f"patch rejected: {scope_reason}"],
+            "duration_ms": 0,
         }
-    except Exception as exc:  # noqa: BLE001 — surface any harness error as a failure
-        pytest_result = {
-            "passed": False,
-            "coverage_delta": -999.0,
-            "failed_assertions": [f"harness error: {exc}"],
-            "duration_ms": int((time.monotonic() - started) * 1000),
-        }
-    finally:
-        if stack_id:
-            await mcp_call("qa", "harness", "teardown_stack", {"stack_id": stack_id})
+    else:
+        try:
+            spin = await mcp_call("qa", "harness", "spin_up_stack", {"spec": spec})
+            stack_id = spin["stack_id"]
+
+            await mcp_call(
+                "qa", "harness", "apply_patch",
+                {
+                    "stack_id": stack_id,
+                    "patched_file": state.get("patched_file", ""),
+                    "file_path": spec["file_path"],
+                    "patch_diff": state["patch"],
+                    "conftest": state["fixture"],
+                },
+            )
+
+            pytest_result = await asyncio.wait_for(
+                mcp_call("qa", "harness", "run_pytest", {"stack_id": stack_id}),
+                timeout=timeout,
+            )
+        except TimeoutError:
+            pytest_result = {
+                "passed": False,
+                "coverage_delta": -999.0,
+                "failed_assertions": ["Test run timed out"],
+                "duration_ms": int(timeout * 1000),
+            }
+        except Exception as exc:  # noqa: BLE001 — surface any harness error as a failure
+            pytest_result = {
+                "passed": False,
+                "coverage_delta": -999.0,
+                "failed_assertions": [f"harness error: {exc}"],
+                "duration_ms": int((time.monotonic() - started) * 1000),
+            }
+        finally:
+            if stack_id:
+                await mcp_call("qa", "harness", "teardown_stack", {"stack_id": stack_id})
 
     duration_ms = pytest_result.get("duration_ms") or int((time.monotonic() - started) * 1000)
     harness_result = HarnessResult(

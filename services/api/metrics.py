@@ -45,6 +45,12 @@ ACTIVE_PIPELINES = Gauge(
     "Currently running agent pipelines",
 )
 
+PIPELINE_FAILURES = Counter(
+    "prodrescue_pipeline_failures_total",
+    "Pipelines that ended without a PR",
+    ["service", "reason"],  # reason: exception | gave_up
+)
+
 
 def emit_prometheus_metrics(
     result: HarnessResult, service: str, time_to_pr: float | None = None
