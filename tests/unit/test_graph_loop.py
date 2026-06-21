@@ -24,6 +24,8 @@ def stub_pipeline(monkeypatch):
     async def fake_mcp(agent, server, tool, args=None):
         if tool == "semantic_search_logs":
             return []
+        if tool == "list_files":
+            return {"files": ["src/payments/processor.py"]}
         if tool == "get_file_contents":
             return {"content": "orig", "path": args["path"]}
         if tool == "spin_up_stack":

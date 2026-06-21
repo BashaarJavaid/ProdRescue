@@ -10,6 +10,8 @@ def stub(monkeypatch):
 
     async def fake_mcp(agent, server, tool, args=None):
         calls.setdefault("mcp", []).append((agent, server, tool))
+        if tool == "list_files":
+            return {"files": ["src/payments/processor.py"]}
         return {"content": "def charge(order):\n    return order.total\n", "path": args["path"]}
 
     async def fake_structured(response_model, system, user, **kw):
@@ -33,7 +35,10 @@ async def test_dev_node_first_attempt(stub):
     assert out["patch"] == "--- a\n+++ b\n"
     assert out["patched_file"] == "def charge(order):\n    return 0\n"
     assert out["fixture"] == "x=1"
-    assert stub["mcp"] == [("dev", "github", "get_file_contents")]
+    assert stub["mcp"] == [
+        ("dev", "github", "list_files"),
+        ("dev", "github", "get_file_contents"),
+    ]
     assert "PREVIOUS PATCH FAILED" not in stub["user"]
 
 

@@ -4,7 +4,28 @@ from services.agents.mcp_clients import (
     AGENT_MCP_SERVERS,
     ScopeError,
     mcp_call,
+    resolve_path,
 )
+
+REPO = ["src/payments/processor.py", "src/payments/__init__.py", "tests/test_x.py"]
+
+
+def test_resolve_path_exact():
+    assert resolve_path("src/payments/processor.py", REPO) == "src/payments/processor.py"
+
+
+def test_resolve_path_strips_leading_segment():
+    # Triage kept a leading 'app/' from the stacktrace.
+    assert resolve_path("app/src/payments/processor.py", REPO) == "src/payments/processor.py"
+
+
+def test_resolve_path_unique_basename():
+    # Triage dropped the 'src/' prefix entirely → fall back to basename match.
+    assert resolve_path("payments/processor.py", REPO) == "src/payments/processor.py"
+
+
+def test_resolve_path_gives_up_on_unknown():
+    assert resolve_path("does/not/exist.py", REPO) is None
 
 
 def test_scope_map_is_least_privilege():

@@ -44,13 +44,24 @@ def _assert_scope(agent: str, server: str) -> None:
 
 
 async def mcp_call(agent: str, server: str, tool: str, args: dict | None = None) -> Any:
-    """Dispatch a scoped tool call. ``args`` keys become tool arguments."""
+    """Dispatch a scoped tool call. ``args`` keys become tool arguments.
+
+    Every call is time-bounded so a wedged MCP server (streamable-http stall, a
+    hung Docker build) can't freeze the worker forever — with prefetch=1 that
+    would block the whole queue. The harness gets a generous bound (it builds an
+    image); logs_db/github get a tight one.
+    """
+    import asyncio
+
     _assert_scope(agent, server)
     args = args or {}
+    timeout = settings.harness_timeout_seconds if server == "harness" else settings.mcp_timeout_seconds
     if server in _SERVER_URLS:
-        return await _streamable_http_call(_SERVER_URLS[server], tool, args)
+        return await asyncio.wait_for(
+            _streamable_http_call(_SERVER_URLS[server], tool, args), timeout=timeout
+        )
     if server == "github":
-        return await _github_call(tool, args)
+        return await asyncio.wait_for(_github_call(tool, args), timeout=timeout)
     raise ValueError(f"unknown MCP server: {server}")
 
 
@@ -84,6 +95,29 @@ async def _streamable_http_call(url: str, tool: str, args: dict) -> Any:
 _DRYRUN_DIR = Path("dryrun_prs")
 
 
+def resolve_path(candidate: str, files: list[str]) -> str | None:
+    """Map a triage-picked path onto a real repo file.
+
+    MiMo's triage is nondeterministic about the source path: it drops the
+    ``src/`` prefix or keeps a leading ``app/`` from the stacktrace. Try the
+    path verbatim, then with leading segments stripped one at a time, then a
+    unique basename match. Returns None if it still can't be pinned.
+    """
+    fileset = set(files)
+    if candidate in fileset:
+        return candidate
+    parts = candidate.split("/")
+    for i in range(1, len(parts)):
+        sub = "/".join(parts[i:])
+        if sub in fileset:
+            return sub
+    base = parts[-1]
+    matches = [f for f in files if f == base or f.endswith("/" + base)]
+    if len(matches) == 1:
+        return matches[0]
+    return None
+
+
 async def _github_call(tool: str, args: dict) -> Any:
     import asyncio
 
@@ -97,6 +131,10 @@ def _github_dryrun(tool: str, args: dict) -> dict:
         # Read from the local target checkout.
         path = Path(settings.target_repo_dir) / args["path"]
         return {"path": args["path"], "content": path.read_text()}
+    if tool == "list_files":
+        base = Path(settings.target_repo_dir)
+        files = [str(p.relative_to(base)) for p in base.rglob("*") if p.is_file()]
+        return {"files": files}
     _DRYRUN_DIR.mkdir(exist_ok=True)
     if tool == "create_pull_request":
         branch = args.get("branch", "prodrescue-fix")
@@ -127,6 +165,11 @@ def _github_real(tool: str, args: dict) -> dict:
         content = repo.get_contents(args["path"], ref=args.get("ref") or repo.default_branch)
         assert not isinstance(content, list), f"{args['path']} is a directory, not a file"
         return {"path": args["path"], "content": content.decoded_content.decode()}
+
+    if tool == "list_files":
+        sha = repo.get_branch(repo.default_branch).commit.sha
+        tree = repo.get_git_tree(sha, recursive=True)
+        return {"files": [e.path for e in tree.tree if e.type == "blob"]}
 
     if tool == "create_branch":
         base = args.get("base") or repo.default_branch

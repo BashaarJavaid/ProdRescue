@@ -11,7 +11,7 @@ from typing import Any
 from uuid import uuid4
 
 from services.agents.llm import structured
-from services.agents.mcp_clients import mcp_call
+from services.agents.mcp_clients import mcp_call, resolve_path
 from services.agents.persistence import mark_resolved, store_harness_result
 from services.agents.prompts import (
     DEV_SYSTEM_PROMPT,
@@ -55,9 +55,18 @@ async def triage_node(state: AgentState) -> dict:
 
 @traceable("dev_node")
 async def dev_node(state: AgentState) -> dict:
-    spec = state["harness_spec"]
+    spec = dict(state["harness_spec"])
+    # Triage's file_path is nondeterministic (drops src/, keeps a leading app/);
+    # pin it to a real file before fetching, and propagate the fix so qa+pr agree.
+    listing = await mcp_call("dev", "github", "list_files", {})
+    resolved = resolve_path(spec["file_path"], listing["files"])
+    if not resolved:
+        raise FileNotFoundError(
+            f"triage picked '{spec['file_path']}', which is not in the repo"
+        )
+    spec["file_path"] = resolved
     source = await mcp_call(
-        "dev", "github", "get_file_contents", {"path": spec["file_path"]}
+        "dev", "github", "get_file_contents", {"path": resolved}
     )
 
     retry_context = ""
@@ -84,6 +93,7 @@ async def dev_node(state: AgentState) -> dict:
     )
 
     return {
+        "harness_spec": spec,  # carries the resolved file_path forward to qa + pr
         "patched_file": result.patched_file,
         "patch": result.patch_diff,
         "fixture": result.conftest,

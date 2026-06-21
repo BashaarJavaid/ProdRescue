@@ -60,6 +60,8 @@ class Settings(BaseSettings):
     # MCP servers
     harness_mcp_url: str = Field(default="http://localhost:8001/mcp")
     logs_db_mcp_url: str = Field(default="http://localhost:8002/mcp")
+    mcp_timeout_seconds: float = Field(default=30.0)       # bound a hung logs_db/github call
+    harness_timeout_seconds: float = Field(default=300.0)  # generous: harness builds a Docker image
 
     # Observability
     json_logs: bool = Field(default=False)  # opt-in: replaces root handler with JSON.
