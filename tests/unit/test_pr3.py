@@ -9,8 +9,14 @@ from services.api.metrics import PIPELINE_FAILURES
 from services.config import settings
 
 
-def test_ready_returns_503_when_deps_down():
-    # No Postgres/RabbitMQ in the unit env → readiness must fail (not lie like /health).
+def test_ready_returns_503_when_deps_down(monkeypatch):
+    # /ready must report unhealthy deps (unlike /health, which always says ok).
+    # Force the DB check to fail so the test is deterministic with or without infra
+    # in the environment (CI runs live Postgres/Redis service containers).
+    async def _down(*a, **k):
+        raise RuntimeError("unavailable")
+
+    monkeypatch.setattr(main.db, "fetchval", _down)
     resp = TestClient(main.app).get("/ready")
     assert resp.status_code == 503
     assert resp.json()["db"].startswith("error")
@@ -54,6 +60,18 @@ async def test_run_graph_swallows_node_crash_and_counts_it(monkeypatch):
             raise RuntimeError("triage picked a bogus file")
 
     monkeypatch.setattr(graph, "build_graph", lambda checkpointer=None: _Boom())
+
+    # run_graph's finally releases a Redis slot and closes the DB pool. Don't hit
+    # real infra here (CI has it live, and a pool bound to a prior test's loop trips
+    # "Event loop is closed") — this test only cares that the crash is caught + counted.
+    import services.api.database as database
+    import services.api.ratelimit as ratelimit
+
+    async def _noop(*a, **k):
+        pass
+
+    monkeypatch.setattr(ratelimit, "release_slot", _noop)
+    monkeypatch.setattr(database.db, "close", _noop)
 
     before = PIPELINE_FAILURES.labels(service="payments", reason="exception")._value.get()
     out = await graph.run_graph({"log_id": "L9", "service": "payments"})
