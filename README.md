@@ -163,5 +163,3 @@ sample_target/  the buggy "payments" service the pipeline diagnoses and patches
 scripts/      seed_incidents.py, inject_crash.sh, crashes/*.json
 tests/        unit/ (55), integration/ (2, gated by RUN_INTEGRATION=1)
 ```
-
-Full design notes and the original spec: [`PRODRESCUE.md`](./PRODRESCUE.md).
