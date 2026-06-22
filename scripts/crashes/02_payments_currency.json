@@ -1,0 +1,7 @@
+{
+  "service": "payments",
+  "message": "KeyError: 'currency' when building the charge request payload in build_request()",
+  "stacktrace": "Traceback (most recent call last):\n  File \"src/payments/processor.py\", line 31, in build_request\n    cur = payload['currency']\nKeyError: 'currency'",
+  "occurred_at": "2026-06-21T11:05:00Z",
+  "metadata": {"env": "prod", "region": "eu-west-1"}
+}

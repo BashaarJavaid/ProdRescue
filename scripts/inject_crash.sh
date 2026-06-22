@@ -1,20 +1,20 @@
 #!/usr/bin/env bash
-# Inject a synthetic production crash and poll the pipeline until it finishes.
-# Usage: scripts/inject_crash.sh [API_URL]
+# Inject a synthetic production crash (from a JSON body file) and poll until done.
+# Usage: scripts/inject_crash.sh [crashfile.json] [API_URL]
+#   crashfile.json  body to POST (default: scripts/crashes/01_payments_none.json)
+#   API_URL         ingest endpoint (default: http://localhost:8000)
 set -euo pipefail
 
-API="${1:-http://localhost:8000}"
+BODY_FILE="${1:-scripts/crashes/01_payments_none.json}"
+API="${2:-http://localhost:8000}"
 
-echo "→ POST ${API}/ingest"
+[ -f "${BODY_FILE}" ] || { echo "no such crash file: ${BODY_FILE}" >&2; exit 1; }
+
+echo "→ POST ${API}/ingest  (body: ${BODY_FILE})"
 RESP=$(curl -sS -X POST "${API}/ingest" \
   -H "Content-Type: application/json" \
-  -d '{
-    "service": "payments",
-    "message": "AttributeError: '"'"'NoneType'"'"' object has no attribute '"'"'total'"'"' in charge()",
-    "stacktrace": "Traceback (most recent call last):\n  File \"src/payments/processor.py\", line 22, in charge\n    amount = order.total * 100\nAttributeError: '"'"'NoneType'"'"' object has no attribute '"'"'total'"'"'",
-    "occurred_at": "2026-06-16T10:30:00Z",
-    "metadata": {"env": "prod", "region": "us-east-1"}
-  }')
+  ${INGEST_API_KEY:+-H "X-API-Key: ${INGEST_API_KEY}"} \
+  -d @"${BODY_FILE}")
 echo "${RESP}"
 
 TASK_ID=$(echo "${RESP}" | python3 -c "import sys, json; print(json.load(sys.stdin)['task_id'])")

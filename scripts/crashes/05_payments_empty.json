@@ -1,0 +1,7 @@
+{
+  "service": "payments",
+  "message": "IndexError: list index out of range in first_charge() on an empty orders list",
+  "stacktrace": "Traceback (most recent call last):\n  File \"src/payments/processor.py\", line 49, in first_charge\n    return charge(orders[0])\nIndexError: list index out of range",
+  "occurred_at": "2026-06-21T14:55:00Z",
+  "metadata": {"env": "prod", "region": "eu-west-1"}
+}

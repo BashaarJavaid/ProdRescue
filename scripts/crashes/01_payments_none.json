@@ -1,0 +1,7 @@
+{
+  "service": "payments",
+  "message": "AttributeError: 'NoneType' object has no attribute 'total' in charge()",
+  "stacktrace": "Traceback (most recent call last):\n  File \"src/payments/processor.py\", line 22, in charge\n    amount = order.total * 100\nAttributeError: 'NoneType' object has no attribute 'total'",
+  "occurred_at": "2026-06-21T10:30:00Z",
+  "metadata": {"env": "prod", "region": "us-east-1"}
+}

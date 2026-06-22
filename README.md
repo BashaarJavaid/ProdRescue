@@ -1,78 +1,141 @@
-# ProdRescue — Self-Healing DevOps Agent
+# ProdRescue — Self-Healing SRE Agent
 
-> An automated SRE pipeline that ingests production error logs, runs a multi-agent AI loop to
-> diagnose and fix bugs, tests patches in an isolated reproducible Docker harness, and
-> automatically opens a GitHub Pull Request — end to end, with a structured retry loop on failure.
+> ProdRescue ingests a production error log, uses a multi-agent LLM pipeline to find the root cause
+> and write a fix, validates that patch in an isolated Docker test harness, and opens a GitHub Pull
+> Request — fully autonomously, with a self-correcting retry loop when a patch fails QA.
 
-Full design spec: [`PRODRESCUE.md`](./PRODRESCUE.md).
+**See it actually work:**
 
+- 👉 **[5 AI-authored fixes, merged into a live repo](https://github.com/BashaarJavaid/prodrescue-target-app/pulls?q=is%3Apr+is%3Amerged)**
+  — each PR (root-cause analysis, unified diff, harness results) was written entirely by the agent.
+- 👉 **[A public LangSmith trace of the agent self-healing](https://smith.langchain.com/public/e16ba235-3e26-4f13-85aa-da0b9534c117/r)**
+  — one incident where the first two patches fail QA and the **third repairs the bug** and ships the PR.
+
+---
+
+## What it does
+
+A production service throws an exception. Instead of paging a human, ProdRescue:
+
+1. **Ingests** the crash via `POST /ingest`, embeds the message, and stores it in pgvector for
+   semantic similarity search against past incidents.
+2. **Triages** it — an LLM agent reads the stacktrace plus similar historical incidents and produces
+   a structured root-cause analysis and a spec describing how to reproduce it.
+3. **Writes a patch** — a Dev agent fetches the source from GitHub and generates the fixed file.
+4. **Proves the fix** — a QA agent spins up an isolated, network-locked, resource-capped Docker
+   stack, applies the patch, runs the test suite, and measures the coverage delta.
+5. **Self-heals on failure** — if QA fails, the failure telemetry is fed back to the Dev agent and
+   it tries again (up to a configurable retry budget).
+6. **Opens a draft PR** — once the patch passes and coverage holds, it pushes a branch and opens a
+   GitHub Pull Request with the diff, root cause, and harness results in the body.
+
+It runs against a public target service,
+[**`prodrescue-target-app`**](https://github.com/BashaarJavaid/prodrescue-target-app) — the repo
+where the demo PRs above were opened.
+
+## Architecture
+
+```mermaid
+graph LR
+    A[Production crash log] --> B["FastAPI /ingest"]
+    B --> C[("embed → pgvector<br/>TimescaleDB")]
+    B --> D["Celery + RabbitMQ"]
+    D --> E
+
+    subgraph E [LangGraph self-healing loop]
+        direction LR
+        T[Triage] --> Dv[Dev]
+        Dv --> Q["QA / Docker harness"]
+        Q -. "pass + coverage ≥ 0" .-> P[PR]
+        Q -. "fail, retries left" .-> Dv
+    end
+
+    P --> G[("GitHub Pull Request")]
+    E --> M[("Prometheus → Grafana")]
 ```
-crash log ─► FastAPI /ingest ─► embed → pgvector ─► Celery/RabbitMQ
-                                                        │
-                              ┌──────────── LangGraph state machine ───────────┐
-                              │  Triage ─► Dev ─► QA/Harness ─►(pass)─► PR node │
-                              │              ▲          │                      │
-                              │              └─(fail, retry<3)┘                │
-                              └─────────────────────────────────────────────────┘
-                                          │                         │
-                                   GitHub Pull Request       Prometheus → Grafana
+
+The core is a LangGraph state machine, checkpointed to Postgres so a worker restart resumes
+mid-incident. This is the actual compiled graph:
+
+```mermaid
+graph TD;
+    start([start]) --> triage
+    triage --> dev
+    dev --> qa
+    qa -. "pass + coverage ≥ 0" .-> pr
+    qa -. "fail, retries remain" .-> dev
+    qa -. "retries exhausted" .-> stop([end])
+    pr --> stop
 ```
 
-## Build status — all phases complete & verified
+Each agent reaches external tools only through scoped **MCP servers** (least-privilege enforced at
+the call site): Triage may search logs, Dev may read source, QA may drive Docker, PR may write to
+GitHub — nothing else.
 
-| Phase | Deliverable | Verified by |
-|------:|-------------|-------------|
-| 0 | Scaffolding, config, deps | `ruff`, config import |
-| 1 | TimescaleDB + pgvector schema | extensions/hypertables/HNSW + vector insert |
-| 2 | FastAPI `/ingest` + Celery + embeddings | `scripts/verify_phase2.py` |
-| 3 | LangGraph agents + retry loop | `scripts/verify_phase3.py` (routing + loop) |
-| 4 | Harness MCP (Docker, coverage gate, teardown) | `scripts/verify_phase4.py` (red→green, no leaks) |
-| 5 | Logs-DB MCP + GitHub + scoping | `scripts/verify_phase5.py` (real streamable-http) |
-| 6 | Prometheus + Grafana + LangSmith | dashboard/promtool validation |
-| 7 | docker-compose, Terraform, K8s, CI | `docker compose config`, `terraform validate`, `kubeconform` |
-| 8 | Demo buggy `sample_target` + seeder | bug reproduces; seeder + resolution lookup |
-| 9 | Unit + integration tests, docs | `pytest` (35 unit + 2 integration) |
+## Key design decisions
 
-## Architecture choices (and where they differ from the spec)
+- **Provider-agnostic LLM** behind an OpenAI-compatible Instructor client (`services/agents/llm.py`).
+  Default model: **Xiaomi MiMo-V2.5-Pro** — swap providers by changing `LLM_BASE_URL` / `LLM_MODEL` /
+  `LLM_API_KEY` only.
+- **Full-file patching, not fragile diffs.** The Dev agent emits the complete fixed file; the harness
+  writes it verbatim and the PR uploads it directly, sidestepping `git apply` rejections.
+- **A real coverage gate.** The harness measures coverage on the pristine code, then on the patched
+  code, and only opens a PR when the delta is non-negative — a patch that weakens the suite is
+  blocked and retried.
+- **A genuinely isolated harness.** QA sub-stacks run with `network_mode: none`, a memory/CPU/PID
+  cap, dropped capabilities, and `no-new-privileges`, with deterministic `try/finally` teardown (no
+  leaked containers or networks).
+- **Semantic incident memory** via pgvector cosine similarity over TimescaleDB hypertables, surfaced
+  to the Triage agent through a custom MCP server.
+- **Production guardrails:** `/ingest` auth, a global concurrency cap, crash de-duplication,
+  idempotent draft PRs, base-SHA-pinned writes, a diff-scope guard, LLM/MCP call timeouts, a `/ready`
+  probe, and graceful (non-crashing) node-error handling.
 
-- **LLM is provider-agnostic** behind an OpenAI-compatible Instructor client
-  (`services/agents/llm.py`). Default model: **Xiaomi MiMo-V2.5-Pro** — swap providers by changing
-  `LLM_BASE_URL` / `LLM_MODEL` / `LLM_API_KEY` only.
-- **Embeddings** use local `sentence-transformers` (`BAAI/bge-small-en-v1.5`, **384-dim**) — no
-  Ollama. The pgvector column is `VECTOR(384)`, driven by `EMBED_DIM` (single source of truth).
-  A deterministic `hash` backend (`EMBED_BACKEND=hash`) is used in tests/CI so no model is downloaded.
-- **MCP tools are called explicitly from node code** (least-privilege enforced at the call site via
-  `AGENT_MCP_SERVERS` in `services/agents/mcp_clients.py`) rather than driven autonomously by the LLM.
-- **GitHub** uses PyGithub when `GITHUB_TOKEN` is set, with a **dry-run fallback** (writes
-  branch/patch/PR-body to `dryrun_prs/`) so the loop is demoable offline.
-- **Checkpointing** uses `AsyncPostgresSaver` (the graph is async).
-- **CI coverage gate** is 60% on the unit suite; Docker/DB-bound modules (the harness server, the
-  asyncpg pool) are exercised by the integration suite (`RUN_INTEGRATION=1`).
+## Observability
+
+Five Prometheus metrics — patch success rate, retries per incident, time-to-PR, coverage delta, and
+active pipelines — feed a version-controlled, auto-provisioned Grafana dashboard
+(`infra/grafana/dashboards/prodrescue.json`), plus full LangSmith tracing of every agent run.
+
+![ProdRescue Grafana dashboard](docs/img/grafana-dashboard.png)
+
+**Observed in a live run** against the target repo: 5 distinct production bugs (NoneType deref,
+`KeyError`, `ZeroDivisionError`, `None`-token `TypeError`, empty-list `IndexError`) diagnosed, fixed,
+and merged; ~75% patch success across all attempts (each retry counts as an attempt); typical
+time-to-PR of 30–60s on CPU-only inference.
+
+## Tech stack
+
+| Layer | Tools |
+|---|---|
+| Orchestration | LangGraph (Postgres checkpointing), Instructor + OpenAI-compatible LLM (MiMo) |
+| Tooling | Model Context Protocol (MCP) servers over streamable-HTTP |
+| API / async | FastAPI, Celery, RabbitMQ, Redis |
+| Data | PostgreSQL + TimescaleDB + pgvector |
+| Test harness | Docker Compose (isolated per-incident stacks), pytest + coverage |
+| Observability | Prometheus, Grafana, LangSmith |
+| Infra (written, validated) | Terraform (EKS/RDS/ElastiCache/ECR), Kubernetes (HPA on queue depth), GitHub Actions CI |
 
 ## Run locally
 
-Prereqs: Docker Desktop (Compose V2), Python 3.11+, and a MiMo-V2.5-Pro endpoint.
+Prereqs: Docker Desktop (Compose V2), Python 3.11+, and an OpenAI-compatible LLM endpoint.
 
 ```bash
-cp .env.example .env          # set LLM_BASE_URL / LLM_API_KEY (MiMo); GITHUB_TOKEN optional
-docker compose up -d --build  # api, worker, rabbitmq, redis, postgres, both MCP servers, prom, grafana
+cp .env.example .env          # set LLM_BASE_URL / LLM_API_KEY / LLM_MODEL
+                              # GITHUB_TOKEN + REPO_FULL_NAME for real PRs (omit → dry-run to ./dryrun_prs)
+docker compose up -d --build  # api, worker, both MCP servers, postgres, rabbitmq, redis, prometheus, grafana
 
-# Backfill historical incidents so semantic search has neighbours
-docker compose exec api python scripts/seed_incidents.py
-
-# Inject a synthetic crash and watch the loop
-scripts/inject_crash.sh
-docker compose logs -f worker
+docker compose exec api python scripts/seed_incidents.py        # backfill incidents for semantic search
+scripts/inject_crash.sh scripts/crashes/01_payments_none.json   # inject a synthetic crash
+docker compose logs -f worker                                   # watch triage → dev → qa → (retry) → pr
 ```
 
 | Service | URL |
-|---------|-----|
+|---|---|
 | FastAPI / Swagger | http://localhost:8000/docs |
-| RabbitMQ mgmt | http://localhost:15672 |
+| Grafana | http://localhost:3000 |
 | Prometheus | http://localhost:9090 |
-| Grafana (anon) | http://localhost:3000 |
-| Harness MCP | http://localhost:8001/mcp |
-| Logs-DB MCP | http://localhost:8002/mcp |
+| RabbitMQ management | http://localhost:15672 |
 
 ## Tests
 
@@ -80,46 +143,25 @@ docker compose logs -f worker
 python -m venv .venv && source .venv/bin/activate
 pip install -r requirements-dev.txt
 
-EMBED_BACKEND=hash pytest tests/unit --cov=services --cov-fail-under=60   # fast, no infra
-RUN_INTEGRATION=1 pytest tests/integration -m integration                 # needs Docker (+DB)
+EMBED_BACKEND=hash pytest tests/unit --cov=services --cov-fail-under=60   # 55 unit tests, no infra
+RUN_INTEGRATION=1 pytest tests/integration -m integration                 # needs Docker (+ DB)
 ruff check services/ tests/ scripts/ && mypy services/ --ignore-missing-imports
 ```
 
-## Layout
+`EMBED_BACKEND=hash` uses a deterministic embedding backend so tests/CI never download model weights.
+
+## Project layout
 
 ```
 services/
-  api/        main.py, tasks.py, embeddings.py, database.py, metrics.py
-  agents/     graph.py, nodes.py, state.py, llm.py, mcp_clients.py, prompts.py, patching.py, persistence.py
+  api/        main.py, tasks.py, embeddings.py, database.py, metrics.py, ratelimit.py
+  agents/     graph.py, nodes.py, state.py, llm.py, mcp_clients.py, prompts.py, patching.py
   mcp_servers/harness/{server.py,compose.py}, logs_db/server.py
-  schemas/    models.py        # HarnessSpec / HarnessResult / ErrorLog + LLM output models
+  schemas/    models.py            # HarnessSpec / HarnessResult / ErrorLog + LLM output models
 infra/        db/init.sql, prometheus.yml, grafana/, main.tf, variables.tf, k8s/
-sample_target/  buggy "payments" service the pipeline diagnoses and patches
-scripts/      verify_phase*.py, seed_incidents.py, inject_crash.sh
-tests/        unit/ (35), integration/ (2, gated by RUN_INTEGRATION=1)
+sample_target/  the buggy "payments" service the pipeline diagnoses and patches
+scripts/      seed_incidents.py, inject_crash.sh, crashes/*.json
+tests/        unit/ (55), integration/ (2, gated by RUN_INTEGRATION=1)
 ```
 
-## Benchmarks (synthetic, illustrative)
-
-| Metric | Naive (single LLM call) | ProdRescue (multi-agent) |
-|--------|------------------------|--------------------------|
-| Patch success rate | 35% | 82% |
-| Mean time to PR | — | 3m 47s |
-| Mean retries / incident | — | 1.2 |
-| Coverage delta (median) | — | +0.4% |
-| PRs blocked by coverage gate | — | 3 / 20 |
-
-## Resume bullets
-
-- **Architected a multi-agent SRE pipeline** with LangGraph (Postgres checkpointing, a
-  coverage-gated self-correcting retry loop, and least-privilege MCP tool surfaces per node).
-- **Engineered a reproducible Docker test harness** with deterministic `try/finally` teardown and a
-  coverage-delta gate that auto-blocks PRs on test regression.
-- **Built semantic incident search** over historical logs with pgvector cosine similarity on
-  TimescaleDB hypertables, exposed to the Triage agent via a custom MCP server.
-- **Provisioned IaC** (Terraform: EKS/RDS/ElastiCache/ECR) and Kubernetes HPA scaling Celery workers
-  on RabbitMQ queue depth, with a lint→test→build→deploy GitHub Actions pipeline.
-- **Instrumented full observability** with five Prometheus metrics and a version-controlled,
-  auto-provisioned Grafana dashboard.
-
-*Built by Bashaar · June 2026*
+Full design notes and the original spec: [`PRODRESCUE.md`](./PRODRESCUE.md).

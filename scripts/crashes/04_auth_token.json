@@ -1,0 +1,7 @@
+{
+  "service": "auth",
+  "message": "TypeError: expected str instance, NoneType found in decode_token()",
+  "stacktrace": "Traceback (most recent call last):\n  File \"src/payments/auth.py\", line 12, in decode_token\n    return token.split('.')[1]\nTypeError: 'NoneType' object has no attribute 'split'",
+  "occurred_at": "2026-06-21T13:40:00Z",
+  "metadata": {"env": "prod", "region": "ap-south-1"}
+}

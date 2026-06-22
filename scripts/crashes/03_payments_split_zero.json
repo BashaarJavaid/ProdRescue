@@ -1,0 +1,7 @@
+{
+  "service": "payments",
+  "message": "ZeroDivisionError: integer division or modulo by zero in split_amount()",
+  "stacktrace": "Traceback (most recent call last):\n  File \"src/payments/processor.py\", line 40, in split_amount\n    return total // n\nZeroDivisionError: integer division or modulo by zero",
+  "occurred_at": "2026-06-21T12:15:00Z",
+  "metadata": {"env": "prod", "region": "us-east-1"}
+}

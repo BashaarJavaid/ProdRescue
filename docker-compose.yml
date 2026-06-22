@@ -24,6 +24,9 @@ x-app-env: &app-env
   LOGS_DB_MCP_URL: http://logs_db_mcp:8002/mcp
   LANGSMITH_API_KEY: ${LANGSMITH_API_KEY:-}
   LANGSMITH_PROJECT: ${LANGSMITH_PROJECT:-prodrescue}
+  # Enable trace upload. langsmith honours LANGSMITH_TRACING over the legacy
+  # LANGCHAIN_TRACING_V2; default on so traces land whenever the API key is set.
+  LANGSMITH_TRACING: ${LANGSMITH_TRACING:-true}
 
 services:
   api:
