@@ -4,6 +4,8 @@
 > and write a fix, validates that patch in an isolated Docker test harness, and opens a GitHub Pull
 > Request — fully autonomously, with a self-correcting retry loop when a patch fails QA.
 
+![ProdRescue end-to-end demo: crash → triage → patch → QA → merged PR](docs/img/demo.gif)
+
 **See it actually work:**
 
 - 👉 **[5 AI-authored fixes, merged into a live repo](https://github.com/BashaarJavaid/prodrescue-target-app/pulls?q=is%3Apr+is%3Amerged)**
